@@ -347,6 +347,91 @@ void __thiscall _Concurrent_queue_base_v4__Internal_swap(
     FIXME("(%p %p) stub\n", this, r);
 }
 
+/* The public iterator ABI consists of two pointers. Its private state holds
+ * a cursor and one page per internal queue. Iteration is explicitly unsafe
+ * with concurrent push/pop; copy and assignment own independent cursor state. */
+typedef struct
+{
+    size_t position;
+    const _Concurrent_queue_base_v4 *queue;
+    _Page *pages[QUEUES_NO];
+} queue_iterator_data;
+
+typedef struct
+{
+    queue_iterator_data *data;
+    void *item;
+} _Concurrent_queue_iterator_base_v4;
+
+static void queue_iterator_refresh(_Concurrent_queue_iterator_base_v4 *this)
+{
+    queue_iterator_data *data = this->data;
+    size_t slot;
+    _Page *page;
+    if (data->position == data->queue->data->tail_pos)
+    {
+        this->item = NULL;
+        return;
+    }
+    slot = data->position / QUEUES_NO & (data->queue->alloc_count - 1);
+    page = data->pages[data->position % QUEUES_NO];
+    this->item = page->data + slot * data->queue->item_size;
+}
+
+DEFINE_THISCALL_WRAPPER(_Concurrent_queue_iterator_base_v4_ctor, 8)
+_Concurrent_queue_iterator_base_v4 * __thiscall _Concurrent_queue_iterator_base_v4_ctor(
+        _Concurrent_queue_iterator_base_v4 *this, const _Concurrent_queue_base_v4 *queue)
+{
+    unsigned int i;
+    TRACE("(%p %p)\n", this, queue);
+    this->data = operator_new(sizeof(*this->data));
+    this->data->position = queue->data->head_pos;
+    this->data->queue = queue;
+    for (i = 0; i < QUEUES_NO; i++) this->data->pages[i] = queue->data->queues[i].head;
+    queue_iterator_refresh(this);
+    return this;
+}
+
+DEFINE_THISCALL_WRAPPER(_Concurrent_queue_iterator_base_v4_dtor, 4)
+void __thiscall _Concurrent_queue_iterator_base_v4_dtor(_Concurrent_queue_iterator_base_v4 *this)
+{
+    TRACE("(%p)\n", this);
+    operator_delete(this->data);
+    this->data = NULL;
+}
+
+DEFINE_THISCALL_WRAPPER(_Concurrent_queue_iterator_base_v4__Advance, 4)
+void __thiscall _Concurrent_queue_iterator_base_v4__Advance(_Concurrent_queue_iterator_base_v4 *this)
+{
+    queue_iterator_data *data = this->data;
+    size_t stripe, slot;
+    TRACE("(%p)\n", this);
+    slot = data->position / QUEUES_NO & (data->queue->alloc_count - 1);
+    stripe = data->position % QUEUES_NO;
+    if (slot == data->queue->alloc_count - 1) data->pages[stripe] = data->pages[stripe]->_Next;
+    data->position++;
+    queue_iterator_refresh(this);
+}
+
+DEFINE_THISCALL_WRAPPER(_Concurrent_queue_iterator_base_v4__Assign, 8)
+void __thiscall _Concurrent_queue_iterator_base_v4__Assign(
+        _Concurrent_queue_iterator_base_v4 *this, const _Concurrent_queue_iterator_base_v4 *source)
+{
+    queue_iterator_data *copy = NULL;
+    TRACE("(%p %p)\n", this, source);
+    if (this->data != source->data)
+    {
+        if (source->data)
+        {
+            copy = operator_new(sizeof(*copy));
+            *copy = *source->data;
+        }
+        operator_delete(this->data);
+        this->data = copy;
+    }
+    this->item = source->item;
+}
+
 DEFINE_THISCALL_WRAPPER(_Concurrent_queue_base_v4_dummy, 4)
 void __thiscall _Concurrent_queue_base_v4_dummy(_Concurrent_queue_base_v4 *this)
 {
