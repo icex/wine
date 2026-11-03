@@ -279,6 +279,15 @@ static BOOL session_set_option( struct object_header *hdr, DWORD option, void *b
         return TRUE;
     }
 
+    case WINHTTP_OPTION_IPV6_FAST_FALLBACK:
+        if (buflen != sizeof(BOOL))
+        {
+            SetLastError( ERROR_INSUFFICIENT_BUFFER );
+            return FALSE;
+        }
+        FIXME( "WINHTTP_OPTION_IPV6_FAST_FALLBACK: %d\n", *(BOOL *)buffer );
+        return TRUE;
+
     default:
         FIXME( "unimplemented option %lu\n", option );
         SetLastError( ERROR_WINHTTP_INVALID_OPTION );
