@@ -267,12 +267,22 @@ static unsigned int get_pe_file_info( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *n
     HANDLE mapping;
 
     *handle = 0;
+    *unix_name = NULL;
+    nt_name->Buffer = NULL;
     memset( info, 0, sizeof(*info) );
-    if (!(status = get_nt_and_unix_names( attr, nt_name, unix_name, FILE_OPEN, FALSE )))
+
+    /* An image supplied through WINE_DLL_FILE_MAP lives only behind a file
+     * descriptor. Try it before get_nt_and_unix_names(): with FILE_OPEN that
+     * call fails outright when the leaf has no on-disk file, and even when a
+     * (still encrypted) placeholder does exist, reading it here would fail the
+     * PE validation below. This mirrors the ordering in open_main_image(). */
+    status = open_mapped_image_file( attr->ObjectName, handle );
+    if (status)
     {
-        status = open_unix_file( handle, *unix_name, GENERIC_READ, attr, 0,
-                                 FILE_SHARE_READ | FILE_SHARE_DELETE,
-                                 FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0 );
+        if (!(status = get_nt_and_unix_names( attr, nt_name, unix_name, FILE_OPEN, FALSE )))
+            status = open_unix_file( handle, *unix_name, GENERIC_READ, attr, 0,
+                                     FILE_SHARE_READ | FILE_SHARE_DELETE,
+                                     FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0 );
     }
     if (status)
     {

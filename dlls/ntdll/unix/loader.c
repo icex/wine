@@ -1617,6 +1617,65 @@ static NTSTATUS open_mapped_dll_file( const UNICODE_STRING *nt_name, HANDLE *map
 
 
 /***********************************************************************
+ *           open_mapped_image_file
+ *
+ * Like open_mapped_dll_file(), but hands back a plain file handle for the
+ * mapped fd rather than an image section.
+ *
+ * Needed by get_pe_file_info() in process.c: process creation validates the
+ * executable by reading it from disk, which fails for an image that only
+ * exists behind WINE_DLL_FILE_MAP. Without this, only DLLs can be loaded
+ * from the map -- a main executable is rejected before the child process's
+ * open_main_image() ever runs.
+ */
+NTSTATUS open_mapped_image_file( const UNICODE_STRING *nt_name, HANDLE *handle )
+{
+    const char *value = getenv( "WINE_DLL_FILE_MAP" );
+    const char *entry, *sep, *end;
+    char *utf8_name;
+    unsigned int allocLen;
+    NTSTATUS status;
+
+
+    if (!value || !*value) return STATUS_DLL_NOT_FOUND;
+    if (!nt_name || !nt_name->Buffer || !nt_name->Length) return STATUS_DLL_NOT_FOUND;
+
+    if ((status = utf8_wcstombs_size( nt_name->Buffer, nt_name->Length / sizeof(WCHAR), &allocLen )))
+        return status;
+    utf8_name = alloca( allocLen );
+    if ((status = utf8_wcstombs( utf8_name, allocLen, &allocLen, nt_name->Buffer,
+                                 nt_name->Length / sizeof(WCHAR) )))
+        return status;
+
+    for (entry = value; *entry; entry = *end ? end + 1 : end)
+    {
+        size_t len;
+        int fd = 0;
+        const char *p;
+
+        end = strchr( entry, '|' );
+        if (!end) end = entry + strlen( entry );
+        if (end == entry) continue;
+
+        sep = strchr( entry, ':' );
+        if (!sep || sep >= end) continue;
+
+        for (p = entry; p < sep; p++)
+        {
+            if (*p < '0' || *p > '9') { fd = -1; break; }
+            fd = fd * 10 + (*p - '0');
+        }
+        if (fd < 0 || sep == entry || sep + 1 == end) continue;
+        len = end - sep - 1;
+        if (len != allocLen || strncmp( sep + 1, utf8_name, len )) continue;
+
+        return wine_server_fd_to_handle( fd, GENERIC_READ | SYNCHRONIZE, 0, handle );
+    }
+    return STATUS_DLL_NOT_FOUND;
+}
+
+
+/***********************************************************************
  *	open_dll_file
  *
  * Open a file for a new dll. Helper for open_builtin_pe_file.

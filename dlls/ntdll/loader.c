@@ -1729,6 +1729,25 @@ static NTSTATUS alloc_thread_tls(void)
 /*************************************************************************
  *              call_tls_callbacks
  */
+/* Set once from WINE_TRACE_TLS: a narrow, always-on trace of main-image TLS
+ * callback execution. The relay channel already traces these, but relay is far
+ * too heavy to run a whole game under; this answers only "did the callbacks
+ * run" for an image that exists solely in a memfd, which is a plain loader
+ * question, not anything protection-specific. */
+static int trace_tls_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled == -1)
+    {
+        UNICODE_STRING name, value;
+        WCHAR buf[8];
+        RtlInitUnicodeString( &name, L"WINE_TRACE_TLS" );
+        value.Buffer = buf; value.Length = 0; value.MaximumLength = sizeof(buf);
+        enabled = RtlQueryEnvironmentVariable_U( NULL, &name, &value ) ? 0 : 1;
+    }
+    return enabled;
+}
+
 static void call_tls_callbacks( HMODULE module, UINT reason )
 {
     const IMAGE_TLS_DIRECTORY *dir;
@@ -1736,7 +1755,20 @@ static void call_tls_callbacks( HMODULE module, UINT reason )
     ULONG dirsize;
 
     dir = RtlImageDirectoryEntryToData( module, TRUE, IMAGE_DIRECTORY_ENTRY_TLS, &dirsize );
-    if (!dir || !dir->AddressOfCallBacks) return;
+    if (!dir || !dir->AddressOfCallBacks)
+    {
+        if (trace_tls_enabled() && module == NtCurrentTeb()->Peb->ImageBaseAddress)
+            MESSAGE( "wine: main image %p has no TLS callbacks (reason %u)\n", module, reason );
+        return;
+    }
+    if (trace_tls_enabled() && module == NtCurrentTeb()->Peb->ImageBaseAddress)
+    {
+        const PIMAGE_TLS_CALLBACK *c;
+        unsigned int n = 0;
+        for (c = (const PIMAGE_TLS_CALLBACK *)dir->AddressOfCallBacks; *c; c++) n++;
+        MESSAGE( "wine: running %u main-image TLS callback(s) at %p, reason %u\n",
+                 n, (void *)dir->AddressOfCallBacks, reason );
+    }
 
     for (callback = (const PIMAGE_TLS_CALLBACK *)dir->AddressOfCallBacks; *callback; callback++)
     {
@@ -1745,11 +1777,20 @@ static void call_tls_callbacks( HMODULE module, UINT reason )
         __TRY
         {
             call_dll_entry_point( (DLLENTRYPROC)*callback, module, reason, NULL );
+            if (trace_tls_enabled() && module == NtCurrentTeb()->Peb->ImageBaseAddress)
+                MESSAGE( "wine: main-image TLS callback %p returned\n", *callback );
         }
         __EXCEPT_ALL
         {
             TRACE_(relay)("\1exception %08lx in TLS callback (proc=%p,module=%p,reason=%s,reserved=0)\n",
                           GetExceptionCode(), callback, module, reason_names[reason] );
+            /* Swallowed, and the remaining callbacks are skipped -- so a title
+             * whose first callback faults loses whatever the rest would have
+             * done, silently. Worth one line: for an image that unpacks part of
+             * its own .text from a callback, that silence is the whole bug. */
+            if (trace_tls_enabled() && module == NtCurrentTeb()->Peb->ImageBaseAddress)
+                MESSAGE( "wine: main-image TLS callback %p raised %08lx; skipping the rest\n",
+                         *callback, GetExceptionCode() );
             return;
         }
         __ENDTRY
@@ -4624,6 +4665,71 @@ static void release_address_space(void)
 #endif
 }
 
+/* Apply byte patches to the main image, from WINE_IMAGE_PATCH.
+ *
+ * Format: "RVA=hexbytes[,RVA=hexbytes...]", e.g. "53d5cec=e900000000".
+ *
+ * A debugging aid for images that exist only in memory. A title decrypted into
+ * a memfd cannot be examined or corrected on disk, so there is otherwise no way
+ * to ask "would this get further if these bytes read differently". Applied
+ * before the entry point runs, so it covers static initialisers.
+ */
+static void apply_image_patches(void)
+{
+    WCHAR valueW[1024];
+    UNICODE_STRING name, value;
+    char spec[1024], *p, *entry, *next;
+    BYTE *base = (BYTE *)NtCurrentTeb()->Peb->ImageBaseAddress;
+    unsigned int i;
+
+    RtlInitUnicodeString( &name, L"WINE_IMAGE_PATCH" );
+    value.Buffer = valueW;
+    value.Length = 0;
+    value.MaximumLength = sizeof(valueW);
+    if (RtlQueryEnvironmentVariable_U( NULL, &name, &value )) return;
+
+    for (i = 0; i < value.Length / sizeof(WCHAR) && i < sizeof(spec) - 1; i++)
+        spec[i] = (char)valueW[i];
+    spec[i] = 0;
+
+    for (entry = spec; entry && *entry; entry = next)
+    {
+        BYTE bytes[64];
+        ULONG_PTR rva;
+        SIZE_T count = 0, size;
+        void *addr;
+        ULONG old;
+
+        if ((next = strchr( entry, ',' ))) *next++ = 0;
+        if (!(p = strchr( entry, '=' ))) continue;
+        *p++ = 0;
+        rva = strtoul( entry, NULL, 16 );
+        while (p[0] && p[1] && count < sizeof(bytes))
+        {
+            char pair[3];
+            pair[0] = p[0];
+            pair[1] = p[1];
+            pair[2] = 0;
+            bytes[count++] = (BYTE)strtoul( pair, NULL, 16 );
+            p += 2;
+        }
+        if (!rva || !count) continue;
+
+        addr = base + rva;
+        size = count;
+        if (NtProtectVirtualMemory( GetCurrentProcess(), &addr, &size, PAGE_EXECUTE_READWRITE, &old ))
+        {
+            ERR( "cannot unprotect image+%#Ix for patching\n", rva );
+            continue;
+        }
+        memcpy( base + rva, bytes, count );
+        addr = base + rva;
+        size = count;
+        NtProtectVirtualMemory( GetCurrentProcess(), &addr, &size, old, &old );
+        MESSAGE( "wine: patched %Iu bytes at image+%#Ix\n", count, rva );
+    }
+}
+
 /******************************************************************
  *		loader_init
  *
@@ -4760,6 +4866,7 @@ void loader_init( CONTEXT *context, void **entry )
     if (!attach_done)  /* first time around */
     {
         attach_done = 1;
+        apply_image_patches();
         if ((status = alloc_thread_tls()) != STATUS_SUCCESS)
         {
             ERR( "TLS init  failed when loading %s, status %lx\n",

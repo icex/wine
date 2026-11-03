@@ -452,6 +452,76 @@ int discard_transcoded_streams(struct fozdb *dump_db, struct fozdb *read_db)
 
 #ifndef _WINEDMO
 
+/* Apply GST_PLUGIN_FEATURE_RANK to the converter elements.
+ *
+ * GStreamer applies that variable at the end of gst_init(), by looking each
+ * named feature up in the registry. These elements are registered afterwards,
+ * from here, so they are never found and the documented override silently does
+ * nothing for them -- which matters because the converter outranks the real
+ * demuxer and decoder, and outside Steam (no pre-transcoded media) it serves
+ * the MEDIACONV_BLANK_VIDEO_FILE placeholder instead of the title's own video.
+ * Re-applying it after registration makes
+ * GST_PLUGIN_FEATURE_RANK=protonvideoconverter:NONE behave as expected. */
+static void media_converter_apply_rank_overrides(void)
+{
+    static const char *const names[] =
+    {
+        "protonvideoconverter",
+        "protonaudioconverter",
+        "protonaudioconverterbin",
+        "protondemuxer",
+    };
+    const char *env = getenv("GST_PLUGIN_FEATURE_RANK");
+    unsigned int i;
+    char **split;
+
+    if (!env || !*env)
+        return;
+
+    split = g_strsplit(env, ",", 0);
+    for (i = 0; split[i]; i++)
+    {
+        char **values = g_strsplit(split[i], ":", 2);
+        unsigned int j;
+
+        if (values[0] && values[1])
+        {
+            for (j = 0; j < ARRAY_SIZE(names); j++)
+            {
+                GstPluginFeature *feature;
+                long rank;
+                char *end;
+
+                if (strcmp(g_strstrip(values[0]), names[j]))
+                    continue;
+
+                if (!g_ascii_strcasecmp(values[1], "NONE")) rank = GST_RANK_NONE;
+                else if (!g_ascii_strcasecmp(values[1], "MARGINAL")) rank = GST_RANK_MARGINAL;
+                else if (!g_ascii_strcasecmp(values[1], "SECONDARY")) rank = GST_RANK_SECONDARY;
+                else if (!g_ascii_strcasecmp(values[1], "PRIMARY")) rank = GST_RANK_PRIMARY;
+                else if (!g_ascii_strcasecmp(values[1], "MAX")) rank = G_MAXINT;
+                else
+                {
+                    rank = strtol(values[1], &end, 10);
+                    if (end == values[1] || *end)
+                        break;
+                }
+
+                if ((feature = gst_registry_find_feature(gst_registry_get(), names[j],
+                        GST_TYPE_ELEMENT_FACTORY)))
+                {
+                    GST_INFO("Setting rank of %s to %ld.", names[j], rank);
+                    gst_plugin_feature_set_rank(feature, rank);
+                    gst_object_unref(feature);
+                }
+                break;
+            }
+        }
+        g_strfreev(values);
+    }
+    g_strfreev(split);
+}
+
 bool media_converter_init(void)
 {
     GST_DEBUG_CATEGORY_INIT(media_converter_debug,
@@ -480,6 +550,8 @@ bool media_converter_init(void)
         GST_ERROR("Failed to register protondemuxer.");
         return false;
     }
+
+    media_converter_apply_rank_overrides();
 
     return true;
 }

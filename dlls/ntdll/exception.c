@@ -211,6 +211,30 @@ NTSTATUS WINAPI dispatch_exception( EXCEPTION_RECORD *rec, CONTEXT *context )
             WINE_BACKTRACE_LOG( "--- Exception %#lx at %s.\n", rec->ExceptionCode, buffer );
         else
             WINE_BACKTRACE_LOG( "--- Exception %#lx.\n", rec->ExceptionCode );
+
+        /* An illegal instruction is nearly always a deliberate trap -- ud2 from
+         * a failed check, or an instruction the CPU does not have -- and which
+         * one it is decides where to look next. Dump the bytes: the faulting
+         * image may exist only in memory, decrypted into a memfd with nothing
+         * on disk to disassemble, so a debugger cannot recover them later. */
+        if (rec->ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION && rec->ExceptionAddress)
+        {
+            char bytes[48 * 3 + 1];
+            unsigned int i;
+
+            bytes[0] = 0;
+            __TRY
+            {
+                const BYTE *code = (const BYTE *)rec->ExceptionAddress - 32;
+                for (i = 0; i < 48; i++) sprintf( bytes + i * 3, "%02x ", code[i] );
+            }
+            __EXCEPT_ALL
+            {
+                strcpy( bytes, "<unreadable>" );
+            }
+            __ENDTRY
+            WINE_BACKTRACE_LOG( "--- Code %p-32..+16: %s\n", rec->ExceptionAddress, bytes );
+        }
     }
 
     switch (rec->ExceptionCode)

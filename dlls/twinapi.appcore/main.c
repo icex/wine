@@ -35,8 +35,18 @@ ULONG WINAPI RegisterAppConstrainedChangeNotification( PAPPCONSTRAIN_CHANGE_ROUT
  */
 ULONG WINAPI RegisterAppStateChangeNotification( PAPPSTATE_CHANGE_ROUTINE routine, void *context, PAPPSTATE_REGISTRATION *reg )
 {
-    FIXME( "routine %p, context %p, reg %p - stub.\n", routine, context, reg );
-    return ERROR_CALL_NOT_IMPLEMENTED;
+    /* Placeholder registration: processes here are never suspended by an app
+     * lifetime manager, so the routine would never be invoked. Callers do treat
+     * a failure as fatal though -- XCurl aborts curl_global_init, which surfaces
+     * as "Could not initialize libcurl" during engine startup -- so report
+     * success and hand back a token that Unregister can accept. */
+    static int placeholder_registration;
+
+    FIXME( "routine %p, context %p, reg %p - semi-stub.\n", routine, context, reg );
+
+    if (!reg) return ERROR_INVALID_PARAMETER;
+    *reg = (PAPPSTATE_REGISTRATION)&placeholder_registration;
+    return ERROR_SUCCESS;
 }
 
 /***********************************************************************
@@ -52,7 +62,8 @@ void WINAPI UnregisterAppConstrainedChangeNotification( PAPPCONSTRAIN_REGISTRATI
  */
 void WINAPI UnregisterAppStateChangeNotification( PAPPSTATE_REGISTRATION reg )
 {
-    FIXME( "reg %p - stub.\n", reg );
+    /* Nothing was registered beyond the placeholder token. */
+    TRACE( "reg %p.\n", reg );
 }
 
 HRESULT WINAPI DllGetClassObject( REFCLSID clsid, REFIID riid, void **out )

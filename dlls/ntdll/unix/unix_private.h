@@ -355,6 +355,7 @@ extern NTSTATUS get_thread_wow64_context( HANDLE handle, void *ctx, ULONG size )
 extern NTSTATUS set_thread_wow64_context( HANDLE handle, const void *ctx, ULONG size );
 extern void fill_vm_counters( VM_COUNTERS_EX *pvmi, int unix_pid );
 extern NTSTATUS open_hkcu_key( const char *path, HANDLE *key );
+extern NTSTATUS open_mapped_image_file( const UNICODE_STRING *nt_name, HANDLE *handle );
 
 extern NTSTATUS sync_ioctl( HANDLE file, ULONG code, void *in_buffer, ULONG in_size,
                             void *out_buffer, ULONG out_size );
