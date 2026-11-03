@@ -1576,81 +1576,10 @@ BOOL WINAPI GetVersionExW( OSVERSIONINFOW *info )
     return TRUE;
 }
 
-/***********************************************************************
- *         GetCurrentApplicationUserModelId   (kernelbase.@)
- */
-LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentApplicationUserModelId( UINT32 *length, WCHAR *id )
-{
-    FIXME( "(%p %p): stub\n", length, id );
-    return APPMODEL_ERROR_NO_APPLICATION;
-}
+/* GetCurrentApplicationUserModelId, GetCurrentPackage{FamilyName,FullName,Id,Info,Path},
+ * GetPackage{FullName,FamilyName} live in package.c: they synthesise the current
+ * process's package identity from its AppxManifest.xml / MicrosoftGame.config. */
 
-/***********************************************************************
- *         GetCurrentPackageFamilyName   (kernelbase.@)
- */
-LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFamilyName( UINT32 *length, WCHAR *name )
-{
-    FIXME( "(%p %p): stub\n", length, name );
-    return APPMODEL_ERROR_NO_PACKAGE;
-}
-
-
-/***********************************************************************
- *         GetCurrentPackageFullName   (kernelbase.@)
- */
-LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFullName( UINT32 *length, WCHAR *name )
-{
-    FIXME( "(%p %p): stub\n", length, name );
-    return APPMODEL_ERROR_NO_PACKAGE;
-}
-
-
-/***********************************************************************
- *         GetCurrentPackageId   (kernelbase.@)
- */
-LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageId( UINT32 *len, BYTE *buffer )
-{
-    FIXME( "(%p %p): stub\n", len, buffer );
-    return APPMODEL_ERROR_NO_PACKAGE;
-}
-
-/***********************************************************************
- *         GetCurrentPackageInfo   (kernelbase.@)
- */
-LONG WINAPI GetCurrentPackageInfo( const UINT32 flags, UINT32 *buffer_size, BYTE *buffer, UINT32 *count )
-{
-    FIXME( "(%#x %p %p %p): stub\n", flags, buffer_size, buffer, count );
-    return APPMODEL_ERROR_NO_PACKAGE;
-}
-
-/***********************************************************************
- *         GetCurrentPackagePath   (kernelbase.@)
- */
-LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackagePath( UINT32 *length, WCHAR *path )
-{
-    FIXME( "(%p %p): stub\n", length, path );
-    return APPMODEL_ERROR_NO_PACKAGE;
-}
-
-
-/***********************************************************************
- *         GetPackageFullName   (kernelbase.@)
- */
-LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFullName( HANDLE process, UINT32 *length, WCHAR *name )
-{
-    FIXME( "(%p %p %p): stub\n", process, length, name );
-    return APPMODEL_ERROR_NO_PACKAGE;
-}
-
-
-/***********************************************************************
- *         GetPackageFamilyName   (kernelbase.@)
- */
-LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFamilyName( HANDLE process, UINT32 *length, WCHAR *name )
-{
-    FIXME( "(%p %p %p): stub\n", process, length, name );
-    return APPMODEL_ERROR_NO_PACKAGE;
-}
 
 /***********************************************************************
  *         GetPackagePathByFullName   (kernelbase.@)
