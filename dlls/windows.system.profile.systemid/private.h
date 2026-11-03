@@ -33,8 +33,11 @@
 #define WIDL_using_Windows_System_Profile
 #define WIDL_using_Windows_Internal_System_Profile
 #define WIDL_using_Windows_Storage_Streams
+#define WIDL_using_Windows_Foundation
+#define WIDL_using_Windows_Foundation_Diagnostics
 #include "windows.system.profile.h"
 #include "windows.internal.system.profile.h"
+#include "windows.foundation.diagnostics.h"
 #include "windows.storage.streams.h"
 
 #define DEFINE_IINSPECTABLE_( pfx, iface_type, impl_type, impl_from, iface_mem, expr )             \

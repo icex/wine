@@ -23,6 +23,7 @@
 
 import "windows.system.profile.idl";
 import "windows.internal.system.profile.idl";
+import "windows.foundation.diagnostics.idl";
 
 namespace Windows.System.Profile {
     runtimeclass SystemIdentification;
@@ -30,4 +31,14 @@ namespace Windows.System.Profile {
 
 namespace Windows.Internal.System.Profile {
     runtimeclass RegionPolicyEvaluator;
+}
+
+/* Hosted here for the same reason RegionPolicyEvaluator is: adding a dll of its
+ * own means an entry in configure.ac and a regenerated configure, and the class
+ * a title asks for is found through the registry by name, not by which dll it
+ * happens to live in. */
+namespace Windows.Foundation.Diagnostics {
+    runtimeclass LoggingChannel;
+    runtimeclass LoggingChannelOptions;
+    runtimeclass LoggingOptions;
 }
