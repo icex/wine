@@ -1617,6 +1617,40 @@ static NTSTATUS open_mapped_dll_file( const UNICODE_STRING *nt_name, HANDLE *map
 
 
 /***********************************************************************
+ *           mapped_fd_to_handle
+ *
+ * Wrap one of the WINE_DLL_FILE_MAP descriptors in a file handle that has a
+ * file offset of its own.
+ *
+ * Handing the mapped descriptor to the server directly would share its offset
+ * with every other handle on it, and with the loader's own use of it. That is
+ * fine for one read of a PE header and wrong for anything else: Halo Infinite's
+ * EasyAntiCheat bootstrapper reads all 83 MB of the game executable to validate
+ * it, which would leave the next open positioned at end of file. Reopening
+ * through /proc/self/fd gives a new open file description on the same object,
+ * so each caller starts at zero.
+ *
+ * If /proc is not there, fall back to the descriptor itself rather than fail:
+ * a shared offset is still better than no image at all, and that is what this
+ * did before.
+ */
+static NTSTATUS mapped_fd_to_handle( int fd, HANDLE *handle )
+{
+    char path[32];
+    NTSTATUS status;
+    int own_fd;
+
+    snprintf( path, sizeof(path), "/proc/self/fd/%d", fd );
+    if ((own_fd = open( path, O_RDONLY )) == -1)
+        return wine_server_fd_to_handle( fd, GENERIC_READ | SYNCHRONIZE, 0, handle );
+
+    status = wine_server_fd_to_handle( own_fd, GENERIC_READ | SYNCHRONIZE, 0, handle );
+    close( own_fd );
+    return status;
+}
+
+
+/***********************************************************************
  *           open_mapped_image_file
  *
  * Like open_mapped_dll_file(), but hands back a plain file handle for the
@@ -1627,6 +1661,10 @@ static NTSTATUS open_mapped_dll_file( const UNICODE_STRING *nt_name, HANDLE *map
  * exists behind WINE_DLL_FILE_MAP. Without this, only DLLs can be loaded
  * from the map -- a main executable is rejected before the child process's
  * open_main_image() ever runs.
+ *
+ * NtCreateFile() uses it too, so that a title which opens its own payload
+ * through the ordinary file API reads the decrypted image rather than the
+ * still-encrypted bytes on disk.
  */
 NTSTATUS open_mapped_image_file( const UNICODE_STRING *nt_name, HANDLE *handle )
 {
@@ -1669,7 +1707,7 @@ NTSTATUS open_mapped_image_file( const UNICODE_STRING *nt_name, HANDLE *handle )
         len = end - sep - 1;
         if (len != allocLen || strncmp( sep + 1, utf8_name, len )) continue;
 
-        return wine_server_fd_to_handle( fd, GENERIC_READ | SYNCHRONIZE, 0, handle );
+        return mapped_fd_to_handle( fd, handle );
     }
     return STATUS_DLL_NOT_FOUND;
 }

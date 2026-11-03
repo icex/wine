@@ -4902,6 +4902,33 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
 
     if (alloc_size) FIXME( "alloc_size not supported\n" );
 
+    /* An image handed over through WINE_DLL_FILE_MAP exists decrypted only
+     * behind a file descriptor; the path it is named by still holds the
+     * encrypted bytes. Windows has no such split -- the Store's filter driver
+     * decrypts on read -- so a title that opens its own payload through the
+     * file API rather than the loader sees plaintext there and expects to.
+     *
+     * Halo Infinite is the case in point. Its EasyAntiCheat bootstrapper reads
+     * game\HaloInfinite.exe and calls GetBinaryTypeW on it before starting
+     * anything, gets ciphertext, and refuses with "Invalid game executable
+     * path!" -- naming a file that is plainly there.
+     *
+     * So answer reads of a mapped image from the descriptor. Only for opening
+     * something that already exists, and only when no write is asked for:
+     * anything that intends to modify the file wants the real one on disk, and
+     * silently giving it a private copy would lose the write.
+     */
+    if (disposition == FILE_OPEN && !(options & (FILE_DIRECTORY_FILE | FILE_OPEN_BY_FILE_ID)) &&
+        !(access & (GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA | FILE_APPEND_DATA |
+                    FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA | DELETE | WRITE_DAC | WRITE_OWNER)) &&
+        !open_mapped_image_file( attr->ObjectName, handle ))
+    {
+        TRACE( "%s served from the mapped image descriptor\n", debugstr_us(attr->ObjectName) );
+        io->Information = FILE_OPENED;
+        io->Status = STATUS_SUCCESS;
+        return STATUS_SUCCESS;
+    }
+
     new_attr = *attr;
     if (options & FILE_OPEN_BY_FILE_ID)
     {
