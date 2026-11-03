@@ -3433,6 +3433,22 @@ static BOOL socket_query_option( struct object_header *hdr, DWORD option, void *
         case WINHTTP_OPTION_WEB_SOCKET_KEEPALIVE_INTERVAL:
             SetLastError( ERROR_INVALID_PARAMETER );
             return FALSE;
+
+        case WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT:
+        {
+            struct socket *socket = (struct socket *)hdr;
+
+            if (!buflen || *buflen < sizeof(DWORD) || !buffer)
+            {
+                *buflen = sizeof(DWORD);
+                SetLastError( ERROR_INSUFFICIENT_BUFFER );
+                return FALSE;
+            }
+            *(DWORD *)buffer = socket->close_timeout;
+            *buflen = sizeof(DWORD);
+            SetLastError( ERROR_SUCCESS );
+            return TRUE;
+        }
     }
 
     FIXME( "unimplemented option %lu\n", option );
@@ -3475,6 +3491,21 @@ static BOOL socket_set_option( struct object_header *hdr, DWORD option, void *bu
         netconn_set_timeout( socket->netconn, FALSE, socket->keepalive_interval );
         SetLastError( ERROR_SUCCESS );
         TRACE( "WINHTTP_OPTION_WEB_SOCKET_KEEPALIVE_INTERVAL %lu.\n", interval);
+        return TRUE;
+    }
+    case WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT:
+    {
+        DWORD timeout;
+
+        if (buflen != sizeof(DWORD) || !(timeout = *(DWORD *)buffer))
+        {
+            WARN( "Invalid parameters for WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT.\n" );
+            SetLastError( ERROR_INVALID_PARAMETER );
+            return FALSE;
+        }
+        socket->close_timeout = timeout;
+        SetLastError( ERROR_SUCCESS );
+        TRACE( "WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT %lu.\n", timeout );
         return TRUE;
     }
     }
@@ -3524,6 +3555,7 @@ HINTERNET WINAPI WinHttpWebSocketCompleteUpgrade( HINTERNET hrequest, DWORD_PTR 
     socket->hdr.context = context;
     socket->hdr.flags = request->connect->hdr.flags & WINHTTP_FLAG_ASYNC;
     socket->keepalive_interval = 30000;
+    socket->close_timeout = 10000;
     socket->send_buffer_size = request->websocket_send_buffer_size;
     if (request->read_size)
     {
@@ -4448,20 +4480,28 @@ static DWORD socket_close( struct socket *socket )
 
     if (socket->close_frame_received) return socket->close_frame_receive_err;
 
-    if ((ret = socket_drain( socket ))) return ret;
+    /* WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT bounds the wait for the peer's
+     * close frame, so it applies here rather than to ordinary receives. */
+    netconn_set_timeout( socket->netconn, FALSE, socket->close_timeout );
 
-    while (1)
+    if (!(ret = socket_drain( socket )))
     {
-        if ((ret = receive_frame( socket, &count, &socket->opcode, &final ))) return ret;
-        if (socket->opcode == SOCKET_OPCODE_CLOSE) break;
-
-        socket->read_size = count;
-        if ((ret = socket_drain( socket ))) return ret;
+        while (1)
+        {
+            if ((ret = receive_frame( socket, &count, &socket->opcode, &final ))) break;
+            if (socket->opcode == SOCKET_OPCODE_CLOSE)
+            {
+                if (!final) FIXME( "Received close opcode without FIN bit.\n" );
+                ret = receive_close_status( socket, count );
+                break;
+            }
+            socket->read_size = count;
+            if ((ret = socket_drain( socket ))) break;
+        }
     }
-    if (!final)
-        FIXME( "Received close opcode without FIN bit.\n" );
 
-    return receive_close_status( socket, count );
+    netconn_set_timeout( socket->netconn, FALSE, socket->keepalive_interval );
+    return ret;
 }
 
 static void socket_close_complete( struct socket *socket, DWORD ret )
