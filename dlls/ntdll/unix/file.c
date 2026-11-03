@@ -5523,13 +5523,44 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
         break;
 
     case FileAllocationInformation:
-    {
-        const FILE_ALLOCATION_INFORMATION *info = ptr;
+        if (len >= sizeof(FILE_ALLOCATION_INFORMATION))
+        {
+            const FILE_ALLOCATION_INFORMATION *info = ptr;
+            struct stat st;
 
-        FIXME("FileAllocationInformation AllocationSize %p stub.\n", (void *)(ULONG_PTR)info->AllocationSize.QuadPart);
-        io->Status = STATUS_SUCCESS;
+            if ((status = server_get_unix_fd( handle, FILE_WRITE_DATA, &fd, &needs_close, NULL, NULL )))
+                return io->Status = status;
+
+            if (fstat( fd, &st ) == -1) status = errno_to_status( errno );
+            else if (S_ISDIR( st.st_mode )) status = STATUS_INVALID_DEVICE_REQUEST;
+            else if (info->AllocationSize.QuadPart < st.st_size)
+            {
+                /* Setting the allocation below end of file truncates on
+                 * Windows, and that part is observable -- returning success
+                 * while leaving the file its old length is a lie a caller can
+                 * see. Go through the server so the change is shared the same
+                 * way FileEndOfFileInformation's is. */
+                if (needs_close) close( fd );
+                needs_close = FALSE;
+                SERVER_START_REQ( set_fd_eof_info )
+                {
+                    req->handle = wine_server_obj_handle( handle );
+                    req->eof    = info->AllocationSize.QuadPart;
+                    status = wine_server_call( req );
+                }
+                SERVER_END_REQ;
+            }
+            /* Growing the allocation is a hint, and is answered with success
+             * and nothing else. Reserving the blocks for real would need
+             * fallocate(FALLOC_FL_KEEP_SIZE), and nothing would ever give
+             * them back: NTFS trims allocation past end of file when the last
+             * handle is closed, Linux filesystems keep it until the file is
+             * truncated or deleted. A downloader that reserves 50 GB and is
+             * cancelled would leave all of it in use and invisible to ls. */
+            if (needs_close) close( fd );
+        }
+        else status = STATUS_INVALID_PARAMETER_3;
         break;
-    }
 
     case FilePipeInformation:
         if (len >= sizeof(FILE_PIPE_INFORMATION))

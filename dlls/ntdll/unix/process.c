@@ -1007,7 +1007,21 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
     {
         if (!handle) process_exiting = TRUE;
         else if (process_exiting) exit_process( exit_code );
-        else abort_process( exit_code );
+        else
+        {
+            /* Not an orderly exit: this skips the shutdown ExitProcess would
+             * run, so there are no DLL detach traces, no destructors and
+             * usually no message -- from outside the process simply vanishes.
+             * The exit code is worth saying out loud too, because it does not
+             * survive the trip out: a Unix parent sees only the low byte, and
+             * get_unix_exit_code() turns a status whose low byte is zero into
+             * 1 so it cannot be mistaken for success. Forza Horizon 5 leaves
+             * 0x1100 and Proton reports 1, which says nothing about what
+             * happened. Say it at warn level, so finding out takes reading a
+             * log rather than attaching strace. */
+            WARN( "process terminating itself abnormally, exit code %#x\n", (unsigned int)exit_code );
+            abort_process( exit_code );
+        }
     }
     return ret;
 }
