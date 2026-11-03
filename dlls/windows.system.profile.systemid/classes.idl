@@ -22,7 +22,12 @@
 #pragma winrt ns_prefix
 
 import "windows.system.profile.idl";
+import "windows.internal.system.profile.idl";
 
 namespace Windows.System.Profile {
     runtimeclass SystemIdentification;
+}
+
+namespace Windows.Internal.System.Profile {
+    runtimeclass RegionPolicyEvaluator;
 }

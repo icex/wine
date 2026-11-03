@@ -1,0 +1,69 @@
+/*
+ * Copyright 2026 Xodus GDK-on-Linux project
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
+/*
+ * Windows.Internal.System.Profile.RegionPolicyEvaluator
+ *
+ * An undocumented, static-only runtime class that Store/Xbox titles consult to
+ * ask whether a feature is permitted in the user's region. Its shape (one
+ * statics interface, two methods, a three-state enum) is documented by the
+ * regionpolicyevaluator-skeleton project. A title that cannot activate it
+ * throws, so we answer every policy as Enabled.
+ */
+
+#ifdef __WIDL__
+#pragma winrt ns_prefix
+#endif
+
+import "inspectable.idl";
+import "windowscontracts.idl";
+
+namespace Windows.Internal.System.Profile {
+    typedef enum PolicyState PolicyState;
+    interface IRegionPolicyEvaluatorStatics;
+    runtimeclass RegionPolicyEvaluator;
+
+    [contract(Windows.Foundation.UniversalApiContract, 1.0)]
+    enum PolicyState
+    {
+        Unknown  = 0,
+        Enabled  = 1,
+        Disabled = 2,
+    };
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.Internal.System.Profile.RegionPolicyEvaluator),
+        uuid(1ca20398-c1d9-5f12-b40a-6528206e3b5e)
+    ]
+    interface IRegionPolicyEvaluatorStatics : IInspectable
+    {
+        HRESULT EvaluatePolicyState([in] GUID policy, [out, retval] Windows.Internal.System.Profile.PolicyState *result);
+        HRESULT ForceEvaluatePolicyState([in] GUID policy, [out, retval] Windows.Internal.System.Profile.PolicyState *result);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        marshaling_behavior(agile),
+        static(Windows.Internal.System.Profile.IRegionPolicyEvaluatorStatics, Windows.Foundation.UniversalApiContract, 1.0),
+        threading(both)
+    ]
+    runtimeclass RegionPolicyEvaluator
+    {
+    }
+}
