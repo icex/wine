@@ -40,6 +40,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(xrandr);
 
 #ifdef SONAME_LIBXRANDR
 
+#include "desktop_refresh.h"
 #include "wine/vulkan.h"
 #include "wine/vulkan_driver.h"
 
@@ -662,6 +663,9 @@ static void set_screen_size( int width, int height )
 static unsigned int get_frequency( const XRRModeInfo *mode )
 {
     unsigned int dots = mode->hTotal * mode->vTotal;
+    unsigned int desktop_rate = desktop_refresh( mode->width, mode->height, mode->dotClock );
+
+    if (desktop_rate) return desktop_rate;
 
     if (!dots)
         return 0;
