@@ -34,13 +34,13 @@
 #include <dlfcn.h>
 #include <stdlib.h>
 #include "x11drv.h"
-#include "desktop_refresh.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(xrandr);
 
 #ifdef SONAME_LIBXRANDR
 
+#include "desktop_refresh.h"
 #include "wine/vulkan.h"
 #include "wine/vulkan_driver.h"
 
