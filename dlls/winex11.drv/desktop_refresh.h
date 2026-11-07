@@ -13,8 +13,8 @@ static unsigned int desktop_refresh( unsigned int width, unsigned int height, un
 {
     const char *setting, *next;
     char *end;
-    unsigned long value;
-    double rate;
+    unsigned long value, rate;
+    unsigned int round_up = 0;
 
     if (clock != 0xffffffffUL || !(setting = getenv( "FERESTRE_DESKTOP_MODE" ))) return 0;
     value = strtoul( setting, &end, 10 );
@@ -23,7 +23,19 @@ static unsigned int desktop_refresh( unsigned int width, unsigned int height, un
     value = strtoul( next, &end, 10 );
     if (end == next || *end != '@' || value != height) return 0;
     next = end + 1;
-    rate = strtod( next, &end );
-    if (end == next || *end || !(rate >= 1.0 && rate <= 1000.0)) return 0;
-    return (unsigned int)(rate + 0.5);
+    rate = strtoul( next, &end, 10 );
+    if (end == next || rate < 1 || rate > 1000) return 0;
+    /* The launcher always uses ASCII decimal notation, regardless of locale. */
+    if (*end == '.')
+    {
+        if (*++end < '0' || *end > '9') return 0;
+        round_up = *end >= '5';
+        while (*end >= '0' && *end <= '9')
+        {
+            if (rate == 1000 && *end != '0') return 0;
+            end++;
+        }
+    }
+    if (*end) return 0;
+    return rate + round_up;
 }
