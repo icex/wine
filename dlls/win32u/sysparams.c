@@ -2172,6 +2172,7 @@ static SIZE *get_screen_sizes( const DEVMODEW *maximum, const DEVMODEW *modes, U
         {2560, 1440},
         {2880, 1620},
         {3200, 1800},
+        {3840, 2160},
         /* 16:10 */
         {1440,  900},
         {1680, 1050},
@@ -2182,6 +2183,10 @@ static SIZE *get_screen_sizes( const DEVMODEW *maximum, const DEVMODEW *modes, U
         {1920, 1280},
         /* 21:9 ultra-wide */
         {2560, 1080},
+        {3440, 1440},
+        /* 32:9 */
+        {3840, 1080},
+        {5120, 1440},
         /* 12:5 */
         {1920,  800},
         {3840, 1600},
