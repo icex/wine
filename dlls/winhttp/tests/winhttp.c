@@ -6299,6 +6299,104 @@ static void test_connection_cache(int port)
     WinHttpCloseHandle(ses);
 }
 
+static void test_decompression(void)
+{
+    HINTERNET ses, req, con;
+    DWORD decompression, len, status, size;
+    BOOL ret;
+
+    ses = WinHttpOpen( L"winetest", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0 );
+    ok( ses != NULL, "got %lu\n", GetLastError() );
+
+    decompression = WINHTTP_DECOMPRESSION_FLAG_ALL;
+    ret = WinHttpSetOption( ses, WINHTTP_OPTION_DECOMPRESSION, &decompression, sizeof(decompression) );
+    ok( ret, "got %lu\n", GetLastError() );
+
+    con = WinHttpConnect( ses, L"test.winehq.org", 0, 0 );
+    ok( con != NULL, "got %lu\n", GetLastError() );
+
+    req = WinHttpOpenRequest( con, NULL, L"tests/gzip.php", NULL, NULL, NULL, 0 );
+    ok( req != NULL, "got %lu\n", GetLastError() );
+
+    ret = WinHttpSendRequest( req, NULL, 0, NULL, 0, 0, 0 );
+    ok( ret, "got %lu\n", GetLastError() );
+
+    ret = WinHttpReceiveResponse( req, NULL );
+    ok( ret, "got %lu\n", GetLastError() );
+
+    status = 0xdeadbeef;
+    size = sizeof(status);
+    ret = WinHttpQueryHeaders( req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &status, &size, NULL );
+    ok( ret, "got %lu\n", GetLastError() );
+    ok( status == HTTP_STATUS_OK, "got %lu\n", status );
+
+    len = 0xdeadbeef;
+    size = sizeof(len);
+    ret = WinHttpQueryHeaders( req, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, NULL, &len, &size, 0 );
+    ok( !ret && GetLastError() == ERROR_WINHTTP_HEADER_NOT_FOUND, "got %lu\n", GetLastError() );
+    ok( len == 0xdeadbeef, "got %lu\n", len );
+
+    for (;;)
+    {
+        char buf[4096];
+
+        size = 0;
+        ret = WinHttpReadData( req, buf, sizeof(buf), &size );
+        ok( ret, "got %lu\n", GetLastError() );
+        if (!ret || !size) break;
+    }
+
+    WinHttpCloseHandle( req );
+    WinHttpCloseHandle( con );
+    WinHttpCloseHandle( ses );
+}
+
+static void test_ferestre_http2_default(void)
+{
+    const WCHAR *name = L"FERESTRE_WINHTTP_HTTP2";
+    DWORD previous_len, flags, len;
+    WCHAR *previous = NULL;
+    HINTERNET session;
+    BOOL ret;
+
+    if (strcmp( winetest_platform, "wine" )) return;
+    if ((previous_len = GetEnvironmentVariableW( name, NULL, 0 )))
+    {
+        previous = malloc( previous_len * sizeof(*previous) );
+        if (!previous) return;
+        GetEnvironmentVariableW( name, previous, previous_len );
+    }
+
+    SetEnvironmentVariableW( name, NULL );
+    session = WinHttpOpen( NULL, WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0 );
+    flags = ~0u;
+    len = sizeof(flags);
+    ret = WinHttpQueryOption( session, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &flags, &len );
+    ok( ret && !flags, "Default WinHTTP protocols %#lx, ret %d.\n", flags, ret );
+    flags = WINHTTP_PROTOCOL_FLAG_HTTP2;
+    ret = WinHttpSetOption( session, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &flags, sizeof(flags) );
+    ok( ret, "Explicit HTTP/2 opt-in failed, error %lu.\n", GetLastError() );
+    WinHttpCloseHandle( session );
+
+    SetEnvironmentVariableW( name, L"1" );
+    session = WinHttpOpen( NULL, WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0 );
+    flags = 0;
+    len = sizeof(flags);
+    ret = WinHttpQueryOption( session, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &flags, &len );
+    ok( ret && flags == WINHTTP_PROTOCOL_FLAG_HTTP2, "Opted-in WinHTTP protocols %#lx, ret %d.\n", flags, ret );
+    flags = 0;
+    ret = WinHttpSetOption( session, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &flags, sizeof(flags) );
+    ok( ret, "Explicit HTTP/2 opt-out failed, error %lu.\n", GetLastError() );
+    flags = ~0u;
+    len = sizeof(flags);
+    ret = WinHttpQueryOption( session, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &flags, &len );
+    ok( ret && !flags, "Overridden WinHTTP protocols %#lx, ret %d.\n", flags, ret );
+    WinHttpCloseHandle( session );
+
+    SetEnvironmentVariableW( name, previous );
+    free( previous );
+}
+
 START_TEST (winhttp)
 {
     struct server_info si;
@@ -6313,6 +6411,7 @@ START_TEST (winhttp)
     pWinHttpWebSocketShutdown = (void *)GetProcAddress(mod, "WinHttpWebSocketShutdown");
     pWinHttpWebSocketReceive = (void *)GetProcAddress(mod, "WinHttpWebSocketReceive");
 
+    test_ferestre_http2_default();
     test_WinHttpOpenRequest();
     test_WinHttpSendRequest();
     test_connect_error();
@@ -6333,6 +6432,7 @@ START_TEST (winhttp)
     test_WinHttpGetIEProxyConfigForCurrentUser();
     test_chunked_read();
     test_max_http_automatic_redirects();
+    test_decompression();
 
     si.event = CreateEventW(NULL, 0, 0, NULL);
     si.port = 7532;

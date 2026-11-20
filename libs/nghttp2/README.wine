@@ -1,0 +1,9 @@
+nghttp2 1.70.0, MIT license (see COPYING and COPYING.sfparse).
+
+Source: https://github.com/nghttp2/nghttp2/commit/85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2
+Source archive SHA256: 3b0d9a02357125078c367a080bdfff1caf130400b7b313dab8b4e887075d2955
+
+The vendored files are the C library sources and headers from lib/ and the
+public nghttp2.h header from lib/includes/nghttp2/. nghttp2ver.h is generated
+from the version template using that release's version and numeric version.
+Wine builds the library as a PE static archive using its normal cross compiler.

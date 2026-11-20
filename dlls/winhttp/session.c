@@ -101,6 +101,11 @@ static BOOL session_query_option( struct object_header *hdr, DWORD option, void 
 
     switch (option)
     {
+    case WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL:
+        if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
+        *(DWORD *)buffer = session->http_protocols;
+        *buflen = sizeof(DWORD);
+        return TRUE;
     case WINHTTP_OPTION_REDIRECT_POLICY:
     {
         if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
@@ -171,6 +176,11 @@ static BOOL session_set_option( struct object_header *hdr, DWORD option, void *b
 
     switch (option)
     {
+    case WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL:
+        if (!buffer || buflen != sizeof(DWORD) || (*(DWORD *)buffer & ~WINHTTP_PROTOCOL_FLAG_HTTP2))
+        { SetLastError( ERROR_INVALID_PARAMETER ); return FALSE; }
+        session->http_protocols = *(DWORD *)buffer;
+        return TRUE;
     case WINHTTP_OPTION_PROXY:
     {
         WINHTTP_PROXY_INFO *pi = buffer;
@@ -262,7 +272,6 @@ static BOOL session_set_option( struct object_header *hdr, DWORD option, void *b
         session->websocket_receive_buffer_size = buffer_size;
         return TRUE;
     }
-
     case WINHTTP_OPTION_WEB_SOCKET_SEND_BUFFER_SIZE:
     {
         DWORD buffer_size;
@@ -288,6 +297,26 @@ static BOOL session_set_option( struct object_header *hdr, DWORD option, void *b
         FIXME( "WINHTTP_OPTION_IPV6_FAST_FALLBACK: %d\n", *(BOOL *)buffer );
         return TRUE;
 
+    case WINHTTP_OPTION_DECOMPRESSION:
+    {
+        DWORD decompression;
+
+        if (!buffer || buflen != sizeof(decompression))
+        {
+            SetLastError( ERROR_INSUFFICIENT_BUFFER );
+            return FALSE;
+        }
+        decompression = *(DWORD *)buffer;
+        if (decompression & ~WINHTTP_DECOMPRESSION_FLAG_ALL)
+        {
+            SetLastError( ERROR_INVALID_PARAMETER );
+            return FALSE;
+        }
+        TRACE( "%#lx\n", decompression );
+        session->hdr.decompression = decompression;
+        return TRUE;
+    }
+
     default:
         FIXME( "unimplemented option %lu\n", option );
         SetLastError( ERROR_WINHTTP_INVALID_OPTION );
@@ -310,6 +339,7 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
 {
     struct session *session;
     HINTERNET handle = NULL;
+    char http2_default[2];
 
     TRACE( "%s, %lu, %s, %s, %#lx\n", debugstr_w(agent), access, debugstr_w(proxy), debugstr_w(bypass), flags );
 
@@ -327,6 +357,8 @@ HINTERNET WINAPI WinHttpOpen( LPCWSTR agent, DWORD access, LPCWSTR proxy, LPCWST
     session->receive_response_timeout = DEFAULT_RECEIVE_RESPONSE_TIMEOUT;
     session->websocket_receive_buffer_size = 32768;
     session->websocket_send_buffer_size = 32768;
+    if (GetEnvironmentVariableA( "FERESTRE_WINHTTP_HTTP2", http2_default, sizeof(http2_default) ) == 1 &&
+        http2_default[0] == '1') session->http_protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
     list_init( &session->cookie_cache );
     InitializeCriticalSectionEx( &session->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
     session->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": session.cs");
@@ -629,6 +661,7 @@ HINTERNET WINAPI WinHttpConnect( HINTERNET hsession, const WCHAR *server, INTERN
     connect->hdr.notify_mask = session->hdr.notify_mask;
     connect->hdr.context = session->hdr.context;
     connect->hdr.redirect_policy = session->hdr.redirect_policy;
+    connect->hdr.decompression = session->hdr.decompression;
 
     addref_object( &session->hdr );
     connect->session = session;
@@ -687,6 +720,7 @@ static void request_destroy( struct object_header *hdr )
         }
     }
 
+    destroy_data_stream( request->data_stream );
     free( request );
 }
 
@@ -822,6 +856,21 @@ static BOOL request_query_option( struct object_header *hdr, DWORD option, void 
         *buflen = sizeof(cert);
         return TRUE;
     }
+    case WINHTTP_OPTION_SERVER_CERT_CHAIN_CONTEXT:
+    {
+        const CERT_CHAIN_CONTEXT *chain;
+        if (!validate_buffer( buffer, buflen, sizeof(chain) )) return FALSE;
+        if (!request->netconn || !request->netconn->chain)
+        {
+            *(const CERT_CHAIN_CONTEXT **)buffer = NULL;
+            SetLastError( ERROR_WINHTTP_INCORRECT_HANDLE_STATE );
+            return FALSE;
+        }
+        if (!(chain = CertDuplicateCertificateChain( request->netconn->chain ))) return FALSE;
+        *(const CERT_CHAIN_CONTEXT **)buffer = chain;
+        *buflen = sizeof(chain);
+        return TRUE;
+    }
     case WINHTTP_OPTION_SECURITY_CERTIFICATE_STRUCT:
     {
         const CERT_CONTEXT *cert = request->server_cert;
@@ -933,8 +982,7 @@ static BOOL request_query_option( struct object_header *hdr, DWORD option, void 
     case WINHTTP_OPTION_HTTP_PROTOCOL_USED:
         if (!validate_buffer( buffer, buflen, sizeof(DWORD) )) return FALSE;
 
-        FIXME("WINHTTP_OPTION_HTTP_PROTOCOL_USED\n");
-        *(DWORD *)buffer = 0;
+        *(DWORD *)buffer = request->http_protocol_used;
         *buflen = sizeof(DWORD);
         return TRUE;
 
@@ -1191,9 +1239,9 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
         return TRUE;
 
     case WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL:
-        if (buflen == sizeof(DWORD))
+        if (buffer && buflen == sizeof(DWORD) && !(*(DWORD *)buffer & ~WINHTTP_PROTOCOL_FLAG_HTTP2))
         {
-            FIXME( "WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL %#lx\n", *(DWORD *)buffer );
+            request->http_protocols = *(DWORD *)buffer;
             return TRUE;
         }
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -1214,7 +1262,6 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
         request->websocket_receive_buffer_size = buffer_size;
         return TRUE;
     }
-
     case WINHTTP_OPTION_WEB_SOCKET_SEND_BUFFER_SIZE:
     {
         DWORD buffer_size;
@@ -1231,11 +1278,21 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
         return TRUE;
     }
 
-    // Asphalt Legends set this option and fails if this returns an error.
-    // While actually not requireing this feature.
     case WINHTTP_OPTION_DECOMPRESSION:
     {
-        FIXME("WINHTTP_OPTION_DECOMPRESSION: stub!\n");
+        DWORD decompression;
+        if (!buffer || buflen != sizeof(decompression))
+        {
+            SetLastError( ERROR_INSUFFICIENT_BUFFER );
+            return FALSE;
+        }
+        decompression = *(DWORD *)buffer;
+        if (decompression & ~WINHTTP_DECOMPRESSION_FLAG_ALL)
+        {
+            SetLastError( ERROR_INVALID_PARAMETER );
+            return FALSE;
+        }
+        request->hdr.decompression = decompression;
         return TRUE;
     }
 
@@ -1246,9 +1303,14 @@ static BOOL request_set_option( struct object_header *hdr, DWORD option, void *b
     }
 }
 
+static void request_handle_closing( struct object_header *hdr )
+{
+    InterlockedExchange( &((struct request *)hdr)->cancelled, 1 );
+}
+
 static const struct object_vtbl request_vtbl =
 {
-    NULL,
+    request_handle_closing,
     request_destroy,
     request_query_option,
     request_set_option
@@ -1324,6 +1386,7 @@ HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, const WCHAR *verb, cons
     request->hdr.notify_mask = connect->hdr.notify_mask;
     request->hdr.context = connect->hdr.context;
     request->hdr.redirect_policy = connect->hdr.redirect_policy;
+    request->hdr.decompression = connect->hdr.decompression;
     init_queue( &request->queue );
 
     addref_object( &connect->hdr );
@@ -1334,11 +1397,14 @@ HINTERNET WINAPI WinHttpOpenRequest( HINTERNET hconnect, const WCHAR *verb, cons
     request->send_timeout = connect->session->send_timeout;
     request->receive_timeout = connect->session->receive_timeout;
     request->receive_response_timeout = connect->session->receive_response_timeout;
+    request->http_protocols = connect->session->http_protocols;
     request->max_redirects = 10;
     request->websocket_receive_buffer_size = connect->session->websocket_receive_buffer_size;
     request->websocket_send_buffer_size = connect->session->websocket_send_buffer_size;
     request->websocket_set_send_buffer_size = request->websocket_send_buffer_size;
     request->read_reply_status = ERROR_WINHTTP_INCORRECT_HANDLE_STATE;
+    request->netconn_stream.data_stream.vtbl = &netconn_stream_vtbl;
+    request->data_stream = &request->netconn_stream.data_stream;
 
     if (!verb || !verb[0]) verb = L"GET";
     if (!(request->verb = wcsdup( verb ))) goto end;
@@ -1469,11 +1535,6 @@ static BOOL set_option( struct object_header *hdr, DWORD option, void *buffer, D
         hdr->context = *(DWORD_PTR *)buffer;
         return TRUE;
     }
-
-    case WINHTTP_OPTION_DECOMPRESSION:
-        FIXME( "WINHTTP_OPTION_DECOMPRESSION, %#lx stub.\n", *(DWORD *)buffer );
-        return TRUE;
-
     default:
         if (hdr->vtbl->set_option) ret = hdr->vtbl->set_option( hdr, option, buffer, buflen );
         else
