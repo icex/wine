@@ -2551,6 +2551,31 @@ static DWORD CALLBACK server_thread(LPVOID param)
         {
             send(c, passportauth, sizeof(passportauth) - 1, 0);
         }
+        else if (strstr(buffer, "GET /websocket_delayed"))
+        {
+            /* the upgrade response, then two text messages a little later */
+            static const char frames[] = "\x81\x05hello" "\x81\x05world";
+            char reply[256], key[32], accept[64];
+            const char *pos = strstr(buffer, "Sec-WebSocket-Key: ");
+
+            if (pos)
+            {
+                memcpy(key, pos + 19, 24);
+                key[24] = 0;
+                create_websocket_accept(key, accept, sizeof(accept));
+                accept[strcspn(accept, "\r\n")] = 0;
+                strcpy(reply, switchprotocols);
+                strcat(reply, "Sec-WebSocket-Accept: ");
+                strcat(reply, accept);
+                strcat(reply, "\r\n\r\n");
+                send(c, reply, strlen(reply), 0);
+                Sleep(500);
+                send(c, frames, sizeof(frames) - 1, 0);
+                while (recv(c, buffer, sizeof(buffer), 0) > 0)
+                    ;
+            }
+            else send(c, notokmsg, sizeof(notokmsg) - 1, 0);
+        }
         else if (strstr(buffer, "GET /websocket"))
         {
             char headers[256], key[32], accept[64];
@@ -3435,6 +3460,115 @@ cleanup:
     WinHttpCloseHandle(req);
     WinHttpCloseHandle(con);
     WinHttpCloseHandle(ses);
+}
+
+struct websocket_receive_info
+{
+    HANDLE event;
+    DWORD status;
+    LONG completions;
+    WINHTTP_WEB_SOCKET_STATUS ws_status;
+};
+
+static void CALLBACK websocket_receive_callback( HINTERNET handle, DWORD_PTR context, DWORD status,
+                                                 void *buffer, DWORD buflen )
+{
+    struct websocket_receive_info *info = (struct websocket_receive_info *)context;
+
+    if (!info) return;
+    switch (status)
+    {
+    case WINHTTP_CALLBACK_STATUS_READ_COMPLETE:
+        if (buflen == sizeof(info->ws_status)) memcpy( &info->ws_status, buffer, buflen );
+        InterlockedIncrement( &info->completions );
+        /* fall through */
+    case WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE:
+    case WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE:
+    case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR:
+        info->status = status;
+        SetEvent( info->event );
+        break;
+    }
+}
+
+static void test_websocket_repeated_receive(int port)
+{
+    static struct websocket_receive_info info;
+    HINTERNET session, connection, request, socket;
+    char buf[64];
+    DWORD err;
+    BOOL ret;
+
+    if (!pWinHttpWebSocketCompleteUpgrade)
+    {
+        win_skip("WinHttpWebSocketCompleteUpgrade not supported\n");
+        return;
+    }
+
+    memset(&info, 0, sizeof(info));
+    info.event = CreateEventW(NULL, FALSE, FALSE, NULL);
+
+    session = WinHttpOpen(L"winetest", 0, NULL, NULL, WINHTTP_FLAG_ASYNC);
+    ok(session != NULL, "got %lu\n", GetLastError());
+    WinHttpSetStatusCallback(session, websocket_receive_callback, WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS, 0);
+    connection = WinHttpConnect(session, L"localhost", port, 0);
+    ok(connection != NULL, "got %lu\n", GetLastError());
+    request = WinHttpOpenRequest(connection, L"GET", L"/websocket_delayed", NULL, NULL, NULL, 0);
+    ok(request != NULL, "got %lu\n", GetLastError());
+    ret = WinHttpSetOption(request, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0);
+    ok(ret, "got %lu\n", GetLastError());
+
+    ret = WinHttpSendRequest(request, NULL, 0, NULL, 0, 0, (DWORD_PTR)&info);
+    ok(ret, "got %lu\n", GetLastError());
+    WaitForSingleObject(info.event, 5000);
+    ok(info.status == WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE, "got %#lx\n", info.status);
+    ret = WinHttpReceiveResponse(request, NULL);
+    ok(ret, "got %lu\n", GetLastError());
+    WaitForSingleObject(info.event, 5000);
+    ok(info.status == WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE, "got %#lx\n", info.status);
+
+    socket = pWinHttpWebSocketCompleteUpgrade(request, (DWORD_PTR)&info);
+    ok(socket != NULL, "got %lu\n", GetLastError());
+
+    /* The first receive, issued twice with the same buffer before any data has
+     * arrived, is one request with one completion (Dead by Daylight does this). */
+    memset(buf, 0, sizeof(buf));
+    info.status = 0;
+    err = pWinHttpWebSocketReceive(socket, buf, sizeof(buf), NULL, NULL);
+    ok(!err, "got %lu\n", err);
+    err = pWinHttpWebSocketReceive(socket, buf, sizeof(buf), NULL, NULL);
+    ok(!err, "got %lu\n", err);
+    WaitForSingleObject(info.event, 5000);
+    ok(info.status == WINHTTP_CALLBACK_STATUS_READ_COMPLETE, "got %#lx\n", info.status);
+    ok(info.ws_status.dwBytesTransferred == 5, "got %lu\n", info.ws_status.dwBytesTransferred);
+    ok(info.ws_status.eBufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, "got %u\n",
+       info.ws_status.eBufferType);
+    ok(!memcmp(buf, "hello", 5), "got %s\n", debugstr_a(buf));
+    ok(WaitForSingleObject(info.event, 300) == WAIT_TIMEOUT, "got a second completion\n");
+    ok(info.completions == 1, "got %lu\n", info.completions);
+
+    memset(buf, 0, sizeof(buf));
+    info.status = 0;
+    err = pWinHttpWebSocketReceive(socket, buf, sizeof(buf), NULL, NULL);
+    ok(!err, "got %lu\n", err);
+    WaitForSingleObject(info.event, 5000);
+    ok(info.status == WINHTTP_CALLBACK_STATUS_READ_COMPLETE, "got %#lx\n", info.status);
+    ok(!memcmp(buf, "world", 5), "got %s\n", debugstr_a(buf));
+
+    /* any other receive while one is pending still fails */
+    info.status = 0;
+    err = pWinHttpWebSocketReceive(socket, buf, sizeof(buf), NULL, NULL);
+    ok(!err, "got %lu\n", err);
+    err = pWinHttpWebSocketReceive(socket, buf, sizeof(buf), NULL, NULL);
+    ok(err == ERROR_INVALID_OPERATION, "got %lu\n", err);
+
+    /* closing the socket cancels the pending receive */
+    WinHttpCloseHandle(socket);
+    WaitForSingleObject(info.event, 5000);
+    WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connection);
+    WinHttpCloseHandle(session);
+    CloseHandle(info.event);
 }
 
 static void test_websocket(int port)
@@ -6465,6 +6599,7 @@ START_TEST (winhttp)
     test_request_path_escapes(si.port);
     test_passport_auth(si.port);
     test_websocket(si.port);
+    test_websocket_repeated_receive(si.port);
     test_redirect(si.port, L"/redirect-temp", L"temporary");
     test_redirect(si.port, L"/redirect-perm", L"permanent");
     test_WinHttpGetProxyForUrl(si.port);
