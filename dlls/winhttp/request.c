@@ -4764,6 +4764,7 @@ static void task_socket_receive( void *ctx, BOOL abort )
 
     TRACE("running %p\n", ctx);
     ret = socket_receive( socket, r->buf, r->len, &count, &type );
+    InterlockedExchangePointer( &socket->first_receive_buf, NULL );
     receive_io_complete( socket );
     if (task_needs_completion( &r->task_hdr ))
         socket_receive_complete( socket, ret, type, count );
@@ -4798,6 +4799,17 @@ DWORD WINAPI WinHttpWebSocketReceive( HINTERNET hsocket, void *buf, DWORD len, D
         if (InterlockedIncrement( &socket->hdr.pending_receives ) > 1)
         {
             InterlockedDecrement( &socket->hdr.pending_receives );
+            /* Dead by Daylight issues its first receive twice, with the same
+             * buffer, right after the upgrade. Treat the repeat as the same request
+             * rather than failing it: the game drops the buffer on the error while
+             * the first receive still writes into it. A later receive while one is
+             * pending still fails, as on Windows. */
+            if (buf && buf == socket->first_receive_buf && len == socket->first_receive_len)
+            {
+                WARN( "Repeated first receive while it is pending, treating it as the same request.\n" );
+                release_object( &socket->hdr );
+                return ERROR_SUCCESS;
+            }
             WARN( "Attempt to queue receive while another is pending.\n" );
             release_object( &socket->hdr );
             return ERROR_INVALID_OPERATION;
@@ -4812,8 +4824,15 @@ DWORD WINAPI WinHttpWebSocketReceive( HINTERNET hsocket, void *buf, DWORD len, D
         r->buf = buf;
         r->len = len;
 
+        if (!socket->receive_queued)
+        {
+            socket->receive_queued = TRUE;
+            socket->first_receive_len = len;
+            InterlockedExchangePointer( &socket->first_receive_buf, buf );
+        }
         if ((ret = queue_task( &socket->recv_q, task_socket_receive, &r->task_hdr, &socket->hdr )))
         {
+            InterlockedExchangePointer( &socket->first_receive_buf, NULL );
             InterlockedDecrement( &socket->hdr.pending_receives );
             free( r );
         }

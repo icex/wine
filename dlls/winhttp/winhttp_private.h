@@ -335,6 +335,10 @@ struct socket
     enum fragment_type sending_fragment_type;
     enum fragment_type receiving_fragment_type;
     BOOL last_receive_final;
+    /* the socket's first asynchronous receive, while it has not completed */
+    BOOL receive_queued;
+    void *first_receive_buf;
+    DWORD first_receive_len;
 };
 
 typedef void (*TASK_CALLBACK)( void *ctx, BOOL abort );
