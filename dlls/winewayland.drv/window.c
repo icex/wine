@@ -442,14 +442,15 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     struct wayland_surface *toplevel_surface;
     struct wayland_client_surface *client;
     struct wayland_win_data *data, *toplevel_data;
-    BOOL managed, fullscreen = swp_flags & WINE_SWP_FULLSCREEN;
+    BOOL managed, needs_surface, fullscreen = swp_flags & WINE_SWP_FULLSCREEN;
+    BOOL is_root = toplevel == hwnd;
 
     TRACE("hwnd %p new_rects %s after %p flags %08x\n", hwnd, debugstr_window_rects(new_rects), insert_after, swp_flags);
 
     /* Get the managed state with win_data unlocked, as is_window_managed
      * may need to query win_data information about other HWNDs and thus
      * acquire the lock itself internally. */
-    if (!(managed = is_window_managed(hwnd, swp_flags, fullscreen)) && surface) toplevel = owner_hint;
+    if (!(managed = is_window_managed(hwnd, swp_flags, fullscreen)) && (surface || is_root)) toplevel = owner_hint;
 
     if (!(data = wayland_win_data_get(hwnd))) return;
     toplevel_data = toplevel && toplevel != hwnd ? wayland_win_data_get_nolock(toplevel) : NULL;
@@ -459,7 +460,12 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     data->is_fullscreen = fullscreen;
     data->managed = managed;
 
-    if (!surface)
+    /* A top-level window entirely covered by its client surface has no window
+     * surface, but that client surface is only shown as a subsurface of the
+     * window's own, which has to stay. */
+    needs_surface = surface || (is_root && data->client_surface);
+
+    if (!needs_surface)
     {
         if ((client = data->client_surface))
         {
